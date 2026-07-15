@@ -155,21 +155,21 @@ function passenger() {
     g.add(thigh, shin, shoe)
   }
 
-  // lap seatbelt (comes along for the ride when they go flying)
-  if (rand() < 0.85) {
-    const belt = new THREE.Mesh(
-      new THREE.TorusGeometry(0.285, 0.028, 8, 24, Math.PI),
-      mat(0x4a4a52, { roughness: 0.7 }),
-    )
-    belt.position.y = -0.26
-    belt.rotation.set(Math.PI / 2, Math.PI, 0)
-    const buckle = new THREE.Mesh(
-      new RoundedBoxGeometry(0.08, 0.055, 0.03, 2, 0.01),
-      mat(0xd7dce4, { roughness: 0.3, metalness: 0.7 }),
-    )
-    buckle.position.set(0, -0.26, -0.29)
-    g.add(belt, buckle)
-  }
+  // lap seatbelt — hidden until the player fastens it (E)
+  const belt = new THREE.Mesh(
+    new THREE.TorusGeometry(0.285, 0.028, 8, 24, Math.PI),
+    mat(0x4a4a52, { roughness: 0.7 }),
+  )
+  belt.position.y = -0.26
+  belt.rotation.set(Math.PI / 2, Math.PI, 0)
+  const buckle = new THREE.Mesh(
+    new RoundedBoxGeometry(0.08, 0.055, 0.03, 2, 0.01),
+    mat(0xd7dce4, { roughness: 0.3, metalness: 0.7 }),
+  )
+  buckle.position.set(0, -0.26, -0.29)
+  belt.visible = buckle.visible = false
+  g.add(belt, buckle)
+  g.userData.beltParts = [belt, buckle]
 
   // big head
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 24, 18), skin)
@@ -327,11 +327,13 @@ export function spawnProps(scene, physics) {
       )
       setYaw(body, (rand() - 0.5) * 0.5)
       p.userData.home = { x, y: 0.95, z: z - 0.04 }
-      p.userData.buckled = true
+      p.userData.buckled = false // the player fastens belts by hand (E)
       passengers.push(p)
       count++
     }
   }
+  // two of them are trouble
+  for (const i of [2, 9]) if (passengers[i]) makeUnruly(passengers[i])
 
   // galley restock — replacements for consumed request items appear here
   const RESTOCK = {
@@ -353,15 +355,65 @@ export function spawnProps(scene, physics) {
     return root
   }
 
-  // "seatbelt" anchor: a soft spring holds each passenger in their seat and
-  // upright through small bumps. It lets go when they're grabbed, flung hard
-  // (speed > 2.6), or knocked away — and re-engages when they're set back.
+  // a troublemaker: red shirt, angry brows, drains the mood until dealt with
+  function makeUnruly(p) {
+    p.userData.unruly = true
+    const torso = p.children[0]
+    torso.material.color.set(0xc94f4f)
+    for (const sx of [-1, 1]) {
+      const brow = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.028, 0.03), mat(0x2e2620))
+      brow.position.set(sx * 0.08, 0.795, -0.17)
+      brow.rotation.z = sx * 0.45
+      p.add(brow)
+    }
+  }
+
+  function setBelt(p, on) {
+    p.userData.buckled = on
+    for (const m of p.userData.beltParts) m.visible = on
+  }
+
+  function seatState(p) {
+    const u = p.userData
+    const t = u.body.translation()
+    const v = u.body.linvel()
+    return {
+      dist: Math.hypot(u.home.x - t.x, u.home.y - t.y, u.home.z - t.z),
+      speed: Math.hypot(v.x, v.y, v.z),
+    }
+  }
+
+  // can the player fasten this one right now? (near their seat, calm, unbuckled)
+  function canBuckle(p) {
+    if (p.userData.kind !== 'passenger' || p.userData.buckled) return false
+    const s = seatState(p)
+    return s.dist < 0.75 && s.speed < 1.5
+  }
+
+  function buckle(p) {
+    if (!canBuckle(p)) return false
+    // click into place: snap to the proper seated pose no matter how
+    // sloppily they were dumped on the seat
+    const body = p.userData.body
+    body.setTranslation(p.userData.home, true)
+    body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true)
+    body.setLinvel({ x: 0, y: 0, z: 0 }, true)
+    body.setAngvel({ x: 0, y: 0, z: 0 }, true)
+    setBelt(p, true)
+    return true
+  }
+
+  // Seat anchoring, two tiers:
+  //  - buckled (player fastened the belt): strong spring — holds through
+  //    turbulence until a hard fling (> 2.6 m/s) or a big displacement.
+  //  - merely seated: weak courtesy hold so nobody slumps over in calm air,
+  //    but ANY real jolt (> 1.0 m/s) breaks it — unbelted passengers fly.
   function fixedUpdate(dt, heldRoot) {
     for (const p of passengers) {
       const u = p.userData
       const body = u.body
       if (p === heldRoot) {
-        u.buckled = false
+        if (u.buckled) setBelt(p, false)
         continue
       }
       const t = body.translation()
@@ -379,29 +431,38 @@ export function spawnProps(scene, physics) {
       const dist = Math.hypot(dx, dy, dz)
       const v = body.linvel()
       const speed = Math.hypot(v.x, v.y, v.z)
+
+      let hold = 0 // spring strength multiplier
       if (u.buckled) {
         if (dist > 0.9 || speed > 2.6) {
-          u.buckled = false
-          continue
+          setBelt(p, false) // the belt gives way
+        } else {
+          hold = 1
         }
-        const m = body.mass()
-        body.applyImpulse(
-          { x: (dx * 25 - v.x * 5) * m * dt, y: (dy * 25 - v.y * 5) * m * dt, z: (dz * 25 - v.z * 5) * m * dt },
-          true,
-        )
-        // gentle upright torque, scaled by approximate capsule inertia (~0.12·m)
-        const q = body.rotation()
-        const upX = 2 * (q.x * q.y - q.w * q.z)
-        const upZ = 2 * (q.y * q.z + q.w * q.x)
-        const av = body.angvel()
-        const im = m * 0.12
-        body.applyTorqueImpulse(
-          { x: (-upZ * 18 - av.x * 5) * im * dt, y: -av.y * 5 * im * dt, z: (upX * 18 - av.z * 5) * im * dt },
-          true,
-        )
-      } else if (dist < 0.45 && speed < 1.2) {
-        u.buckled = true
+      } else if (dist < 0.5 && speed < 1.0) {
+        hold = 0.3
       }
+      if (!hold) continue
+
+      const m = body.mass()
+      body.applyImpulse(
+        {
+          x: (dx * 25 - v.x * 5) * hold * m * dt,
+          y: (dy * 25 - v.y * 5) * hold * m * dt,
+          z: (dz * 25 - v.z * 5) * hold * m * dt,
+        },
+        true,
+      )
+      // gentle upright torque, scaled by approximate capsule inertia (~0.12·m)
+      const q = body.rotation()
+      const upX = 2 * (q.x * q.y - q.w * q.z)
+      const upZ = 2 * (q.y * q.z + q.w * q.x)
+      const av = body.angvel()
+      const im = m * 0.12 * hold
+      body.applyTorqueImpulse(
+        { x: (-upZ * 18 - av.x * 5) * im * dt, y: -av.y * 5 * im * dt, z: (upX * 18 - av.z * 5) * im * dt },
+        true,
+      )
     }
   }
 
@@ -418,5 +479,5 @@ export function spawnProps(scene, physics) {
     }
   }
 
-  return { grabbables, passengers, update, fixedUpdate, spawnItem }
+  return { grabbables, passengers, update, fixedUpdate, spawnItem, buckle, canBuckle }
 }
