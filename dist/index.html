@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turbulence! ✈</title>
+  <style>
+    :root {
+      --cream: #f4ead9;
+      --ink: #2b2b33;
+      --orange: #ff7a30;
+      --blue: #5b7fd4;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #1a1d2e; }
+    body { font-family: -apple-system, "SF Pro Rounded", "Segoe UI", system-ui, sans-serif; }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    /* soft vignette */
+    #vignette {
+      position: fixed; inset: 0; pointer-events: none; z-index: 5;
+      background: radial-gradient(ellipse at center, transparent 62%, rgba(20, 16, 30, 0.35) 100%);
+    }
+
+    /* crosshair */
+    #crosshair {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 6px; height: 6px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.15);
+      z-index: 10; pointer-events: none;
+      transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+      display: none;
+    }
+    #crosshair.hover {
+      transform: translate(-50%, -50%) scale(2.2);
+      background: var(--orange);
+      box-shadow: 0 0 0 3px rgba(255, 122, 48, 0.35), 0 0 14px rgba(255, 122, 48, 0.6);
+    }
+    #crosshair.holding {
+      transform: translate(-50%, -50%) scale(1.6);
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.4);
+    }
+
+    /* HUD */
+    #hud {
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+      display: none; flex-direction: column; justify-content: space-between;
+      padding: 18px 22px;
+    }
+    #hud.visible, #crosshair.visible { display: flex; }
+    #hud .top { display: flex; justify-content: space-between; align-items: flex-start; }
+    .chip.meter { display: flex; align-items: center; gap: 10px; }
+    .track {
+      width: 150px; height: 10px; border-radius: 5px;
+      background: rgba(255, 255, 255, 0.18); overflow: hidden;
+    }
+    #satfill {
+      height: 100%; width: 80%; border-radius: 5px; background: #7bc47f;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+    .stars { text-align: center; font-size: 44px; color: var(--orange); letter-spacing: 6px; padding: 6px 0 2px; }
+    .stats { display: flex; justify-content: center; gap: 26px; font-size: 14px; color: #6b5f4c; padding-bottom: 8px; }
+    .stats b { color: var(--ink); }
+    .chip {
+      background: rgba(30, 26, 40, 0.55); color: var(--cream);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px; padding: 8px 14px;
+      font-size: 13px; letter-spacing: 0.4px; font-weight: 600;
+    }
+    .chip .accent { color: var(--orange); }
+    #hint {
+      align-self: center; margin-bottom: 4px;
+      font-size: 13px; font-weight: 600;
+      transition: opacity 0.3s ease;
+    }
+    #hint.flash { color: #ffd9a0; background: rgba(180, 60, 20, 0.6); }
+
+    /* boarding-pass overlays */
+    .overlay {
+      position: fixed; inset: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(16, 14, 26, 0.55); backdrop-filter: blur(6px);
+      transition: opacity 0.35s ease;
+    }
+    .overlay.hidden { opacity: 0; pointer-events: none; }
+    .pass {
+      width: min(520px, 92vw);
+      background: var(--cream); color: var(--ink);
+      border-radius: 22px; overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+      cursor: pointer; user-select: none;
+      transition: transform 0.2s ease;
+    }
+    .pass:hover { transform: translateY(-3px) rotate(-0.4deg); }
+    .pass .head {
+      background: var(--blue); color: #fff;
+      padding: 18px 26px; display: flex; justify-content: space-between; align-items: center;
+    }
+    .pass .head h1 { font-size: 26px; letter-spacing: 1px; }
+    .pass .head .logo { font-size: 26px; }
+    .pass .body { padding: 22px 26px 12px; }
+    .pass .route {
+      display: flex; align-items: center; gap: 14px;
+      font-size: 30px; font-weight: 800; letter-spacing: 2px;
+    }
+    .pass .route .plane { color: var(--orange); font-size: 20px; flex: 1; text-align: center; position: relative; }
+    .pass .route .plane::before, .pass .route .plane::after {
+      content: ""; position: absolute; top: 50%; height: 2px; width: 34%;
+      background: repeating-linear-gradient(90deg, #b9a88e 0 6px, transparent 6px 12px);
+    }
+    .pass .route .plane::before { left: 0; }
+    .pass .route .plane::after { right: 0; }
+    .pass .sub { color: #8a7c66; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; margin-top: 2px; }
+    .pass .divider {
+      margin: 16px 0; border-top: 2px dashed #cdbfa8; position: relative;
+    }
+    .pass .divider::before, .pass .divider::after {
+      content: ""; position: absolute; top: -11px; width: 20px; height: 20px; border-radius: 50%;
+      background: rgba(16, 14, 26, 0.88);
+    }
+    .pass .divider::before { left: -36px; }
+    .pass .divider::after { right: -36px; }
+    .pass .controls {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px;
+      font-size: 13.5px; padding-bottom: 6px;
+    }
+    .pass .controls div { display: flex; justify-content: space-between; }
+    .pass .controls b {
+      background: #e7dbc6; border-radius: 6px; padding: 1px 8px;
+      font-size: 12px; box-shadow: 0 2px 0 #cbbc9f;
+    }
+    .pass .cta {
+      background: var(--orange); color: #fff; text-align: center;
+      padding: 14px; font-weight: 800; letter-spacing: 2px; font-size: 14px;
+    }
+    .pass .fine { text-align: center; font-size: 10.5px; color: #a5967c; padding: 8px 0 2px; }
+  </style>
+  <script type="module" crossorigin src="/assets/index-BKiY7Mj8.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="vignette"></div>
+  <div id="crosshair"></div>
+
+  <div id="hud">
+    <div class="top">
+      <div class="chip">✈ <span class="accent">TURBULENCE!</span>&nbsp; traycer air · TB-042</div>
+      <div class="chip meter">⭐ <div class="track"><div id="satfill"></div></div></div>
+      <div class="chip" id="timerchip">🛬 3:00</div>
+    </div>
+    <div class="chip" id="hint">Hold <b>Click</b> grab · <b>Right-click</b> throw · <b>T</b> turbulence test</div>
+  </div>
+
+  <div id="overlay" class="overlay">
+    <div class="pass" id="board">
+      <div class="head"><h1>TURBULENCE!</h1><div class="logo"><img src="/traycer-mark.svg" alt="traycer" style="width:38px;height:38px;filter:invert(1);mix-blend-mode:screen;display:block" /></div></div>
+      <div class="body">
+        <div class="route"><span>YOU</span><span class="plane">✈</span><span>CHAOS</span></div>
+        <div class="sub">TRAYCER AIR · CABIN CREW TRAINING · GATE B7</div>
+        <div class="divider"></div>
+        <div class="controls">
+          <div><span>Move</span><b>W A S D</b></div>
+          <div><span>Look</span><b>MOUSE</b></div>
+          <div><span>Grab &amp; carry</span><b>HOLD CLICK</b></div>
+          <div><span>Throw</span><b>RIGHT-CLICK</b></div>
+          <div><span>Turbulence test</span><b>T</b></div>
+          <div><span>Pause</span><b>ESC</b></div>
+        </div>
+      </div>
+      <div class="cta">CLICK TO BOARD</div>
+      <div class="fine">TRAYCER AIR® — passenger safety barely makes the list</div>
+    </div>
+  </div>
+
+  <div id="endOverlay" class="overlay hidden">
+    <div class="pass" id="endCard">
+      <div class="head"><h1>TURBULENCE!</h1><div class="logo"><img src="/traycer-mark.svg" alt="traycer" style="width:38px;height:38px;filter:invert(1);mix-blend-mode:screen;display:block" /></div></div>
+      <div class="body">
+        <div class="route"><span>YOU</span><span class="plane">✈</span><span id="endVerdict">LANDED</span></div>
+        <div class="sub" id="endSub">FLIGHT TB-042 COMPLETE · THANK YOU FOR FLYING TRAYCER AIR</div>
+        <div class="divider"></div>
+        <div class="stars" id="endStars">★★★☆☆</div>
+        <div class="stats">
+          <span>Served <b id="statServed">0</b></span>
+          <span>Missed <b id="statMissed">0</b></span>
+          <span>Satisfaction <b id="statSat">0%</b></span>
+        </div>
+      </div>
+      <div class="cta">FLY AGAIN</div>
+      <div class="fine">TRAYCER AIR® — any landing you can ragdoll away from</div>
+    </div>
+  </div>
+
+</body>
+</html>
